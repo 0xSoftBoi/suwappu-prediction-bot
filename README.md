@@ -39,6 +39,43 @@ python bot.py detail --id <market-id> --json
 | `browse` | List trending prediction markets with YES/NO probabilities |
 | `detail` | Deep dive into a specific market |
 
+## Example Output
+
+```
+$ bun run src/cli.ts browse --top 3
+
+Prediction Markets
+
+  Will Bitcoin hit $100k by end of 2026?
+    YES: 72% | Vol: $4.2M | Ends: 2026-12-31 | Active
+
+  Will Ethereum flip Bitcoin in market cap?
+    YES: 8% | Vol: $1.8M | Ends: 2027-06-30 | Active
+
+  Will the Fed cut rates in Q2 2026?
+    YES: 54% | Vol: $890K | Ends: 2026-06-30 | Active
+```
+
+```
+$ bun run src/cli.ts detail --id 0xabc123
+
+"Will Bitcoin hit $100k by end of 2026?"
+
+  Bitcoin reaching six figures has been a long-standing milestone...
+
+  Category:  crypto
+  Created:   2025-01-15
+  Ends:      2026-12-31
+  Resolved:  Not yet
+  Outcomes:  Yes (72.0%) | No (28.0%)
+```
+
+## Development
+
+```bash
+bun test && bun run check
+```
+
 ## Links
 
 - [Suwappu Docs](https://docs.suwappu.bot) | [Prediction Markets Guide](https://docs.suwappu.bot/guides/prediction-markets)
