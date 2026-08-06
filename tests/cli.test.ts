@@ -59,7 +59,7 @@ describe("volume formatting", () => {
 });
 
 describe("subcommand validation", () => {
-  const valid = ["browse", "detail"];
+  const valid = ["browse", "detail", "book", "price", "trades", "positions", "orders", "events"];
   it("should accept browse and detail", () => {
     expect(valid.includes("browse")).toBe(true);
     expect(valid.includes("detail")).toBe(true);
