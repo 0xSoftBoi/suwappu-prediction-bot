@@ -1,7 +1,9 @@
 #!/usr/bin/env bun
-import { Command } from "commander";
+import { Command, InvalidArgumentError } from "commander";
 import { createClient } from "@suwappu/sdk";
+import { buildMarketHealthSnapshot } from "./analysis.js";
 import { predictionApi } from "./api.js";
+import { parseReadCount } from "./limits.js";
 
 function requireEnv(name: string): string {
   const value = process.env[name];
@@ -16,6 +18,14 @@ function client() {
   return createClient({ apiKey: requireEnv("SUWAPPU_API_KEY") });
 }
 
+function readCount(value: string): number {
+  try {
+    return parseReadCount(value);
+  } catch (error) {
+    throw new InvalidArgumentError(error instanceof Error ? error.message : String(error));
+  }
+}
+
 async function printCurrent(request: () => Promise<unknown>): Promise<void> {
   requireEnv("SUWAPPU_API_KEY");
   try {
@@ -28,13 +38,13 @@ async function printCurrent(request: () => Promise<unknown>): Promise<void> {
 
 const program = new Command()
   .name("suwappu-prediction-bot")
-  .description("Read-only Polymarket data explorer powered by Suwappu")
-  .version("1.0.0");
+  .description("Read-only prediction-market research reference powered by Suwappu")
+  .version("1.1.0");
 
 program
   .command("browse")
   .description("Browse prediction markets")
-  .option("--top <n>", "number of markets", parseInt, 10)
+  .option("--top <n>", "number of markets (1-100)", readCount, 10)
   .option("--query <q>", "search by keyword")
   .option("--json", "JSON output")
   .action(async (opts) => {
@@ -115,8 +125,26 @@ program
   .command("trades")
   .description("Get recent trades for a market")
   .requiredOption("--id <id>", "market ID")
-  .option("--limit <n>", "number of trades", parseInt, 20)
+  .option("--limit <n>", "number of trades (1-100)", readCount, 20)
   .action((opts) => printCurrent(() => predictionApi.trades(opts.id, opts.limit)));
+
+program
+  .command("snapshot")
+  .description("Build a read-only market-health snapshot from detail, price, book, and trades")
+  .requiredOption("--id <id>", "market ID")
+  .option("--trades <n>", "recent trades to inspect (1-100)", readCount, 20)
+  .action((opts) =>
+    printCurrent(async () => {
+      const sdk = client();
+      const [detail, book, prices, trades] = await Promise.all([
+        sdk.predict.market(opts.id),
+        predictionApi.book(opts.id),
+        predictionApi.price(opts.id),
+        predictionApi.trades(opts.id, opts.trades),
+      ]);
+      return buildMarketHealthSnapshot(detail, book, prices, trades);
+    }),
+  );
 
 program
   .command("positions")
@@ -133,7 +161,7 @@ program
   .command("events")
   .description("Browse/search prediction events")
   .option("--query <q>", "search text")
-  .option("--top <n>", "number of events", parseInt, 20)
+  .option("--top <n>", "number of events (1-100)", readCount, 20)
   .action((opts) => printCurrent(() => predictionApi.events(opts.query, opts.top)));
 
 program.parseAsync();
