@@ -1,9 +1,10 @@
 # Security Policy
 
-This repository is a satellite / example application built on the
-[Suwappu API](https://github.com/0xSoftBoi/suwappubot). Some examples can
-initiate real financial transactions when execution is enabled. Treat API keys,
-wallet credentials, and configuration as sensitive.
+This repository is a read-only satellite / example application built on the
+[Suwappu API](https://github.com/0xSoftBoi/suwappubot). Its CLI allowlist does
+not expose prediction order placement or cancellation. Treat API keys and
+configuration as sensitive even though this repository itself cannot submit a
+prediction-market order.
 
 ## Reporting a vulnerability
 
@@ -21,12 +22,18 @@ contracts, custody/key-management layer, or shared SDK should be reported
 upstream through the
 [core security policy](https://github.com/0xSoftBoi/suwappubot/security/policy).
 
-## Custody and execution model
+## Read-only authority boundary
 
-Suwappu supports both self-custody and custodial product flows. This satellite
-repository does not make a custody guarantee: behavior depends on the API mode
-and configuration in use. Prefer dry-run or read-only modes where available,
-use test wallets before enabling execution, and never commit credentials.
+The upstream Suwappu API and SDKs do expose prediction-market order placement
+and cancellation. Those methods are deliberately omitted here. A change that
+adds a money-moving method is a security-boundary change and must add explicit
+application approval/policy controls rather than hiding execution behind a
+research command.
+
+`positions` and `orders` only inspect state already associated with the agent.
+They may require Polymarket credentials that were initialized by a trading
+workflow outside this repository; this explorer does not initialize them by
+placing an order.
 
 ## Our commitment
 

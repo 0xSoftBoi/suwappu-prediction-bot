@@ -1,79 +1,95 @@
-import { describe, it, expect } from "bun:test";
+import { describe, expect, it } from "bun:test";
+import { buildMarketHealthSnapshot } from "../src/analysis";
+import { parseReadCount } from "../src/limits";
 
-function formatProbability(price: number): string {
-  return (price * 100).toFixed(0) + "%";
-}
+const detail = {
+  id: "market-1",
+  question: "Will the example happen?",
+  active: true,
+  endDate: "2027-01-01T00:00:00Z",
+  volume: 125_000,
+  liquidity: 20_000,
+};
 
-function formatVolume(volume: number): string {
-  if (volume > 1e6) return `$${(volume / 1e6).toFixed(1)}M`;
-  if (volume > 1e3) return `$${(volume / 1e3).toFixed(0)}K`;
-  return `$${volume.toFixed(0)}`;
-}
-
-function isActive(endDate: string): boolean {
-  return new Date(endDate) > new Date();
-}
-
-describe("probability formatting", () => {
-  it("should format 0.65 as 65%", () => {
-    expect(formatProbability(0.65)).toBe("65%");
+describe("read-count validation", () => {
+  it("accepts the documented range", () => {
+    expect(parseReadCount("1")).toBe(1);
+    expect(parseReadCount("100")).toBe(100);
   });
 
-  it("should format 0.01 as 1%", () => {
-    expect(formatProbability(0.01)).toBe("1%");
-  });
-
-  it("should format 0.99 as 99%", () => {
-    expect(formatProbability(0.99)).toBe("99%");
-  });
-
-  it("should format 0 as 0%", () => {
-    expect(formatProbability(0)).toBe("0%");
-  });
-
-  it("should format 1.0 as 100%", () => {
-    expect(formatProbability(1.0)).toBe("100%");
+  it("rejects unbounded or ambiguous values", () => {
+    for (const value of ["0", "101", "2.5", "-1", "nope"]) {
+      expect(() => parseReadCount(value)).toThrow("expected an integer from 1 to 100");
+    }
   });
 });
 
-describe("volume formatting", () => {
-  it("should format millions with M suffix", () => {
-    expect(formatVolume(1_500_000)).toBe("$1.5M");
+describe("market-health snapshot", () => {
+  it("derives top-of-book spread and nearby depth from unsorted levels", () => {
+    const snapshot = buildMarketHealthSnapshot(
+      detail,
+      {
+        marketId: "market-1",
+        question: detail.question,
+        outcomes: [
+          {
+            outcome: "Yes",
+            tokenId: "yes-token",
+            bids: [
+              { price: "0.40", size: "10" },
+              { price: "0.42", size: "5" },
+            ],
+            asks: [
+              { price: "0.47", size: "3" },
+              { price: "0.46", size: "2" },
+            ],
+            lastTradePrice: "0.43",
+          },
+        ],
+      },
+      { prices: [{ outcome: "Yes", tokenId: "yes-token", mid: "0.44" }] },
+      { trades: [{ timestamp: "2026-08-07T12:00:00Z" }] },
+      "2026-08-07T12:01:00Z",
+    );
+
+    expect(snapshot.capturedAt).toBe("2026-08-07T12:01:00Z");
+    expect(snapshot.outcomes[0]).toMatchObject({
+      bestBid: 0.42,
+      bestAsk: 0.46,
+      spread: 0.04,
+      bidDepthWithinOneCentShares: 5,
+      askDepthWithinOneCentShares: 5,
+      midpoint: 0.44,
+      lastTradePrice: 0.43,
+    });
+    expect(snapshot.recentTrades).toEqual({
+      count: 1,
+      latestAt: "2026-08-07T12:00:00Z",
+    });
+    expect(snapshot.warnings).toEqual([]);
   });
 
-  it("should format thousands with K suffix", () => {
-    expect(formatVolume(250_000)).toBe("$250K");
-  });
+  it("surfaces incomplete and crossed books instead of inventing liquidity", () => {
+    const snapshot = buildMarketHealthSnapshot(
+      { ...detail, active: false },
+      {
+        outcomes: [
+          {
+            outcome: "Yes",
+            tokenId: "yes-token",
+            bids: [{ price: "0.60", size: "1" }],
+            asks: [{ price: "0.55", size: "1" }],
+          },
+          { outcome: "No", tokenId: "no-token", bids: [], asks: [] },
+        ],
+      },
+      { prices: [] },
+      { trades: [] },
+    );
 
-  it("should format small volumes as raw number", () => {
-    expect(formatVolume(500)).toBe("$500");
-  });
-
-  it("should format exactly 1M", () => {
-    expect(formatVolume(1_000_000)).toBe("$1000K");
-  });
-
-  it("should format > 1M with M", () => {
-    expect(formatVolume(1_000_001)).toBe("$1.0M");
-  });
-});
-
-describe("subcommand validation", () => {
-  const valid = ["browse", "detail", "book", "price", "trades", "positions", "orders", "events"];
-  it("should accept browse and detail", () => {
-    expect(valid.includes("browse")).toBe(true);
-    expect(valid.includes("detail")).toBe(true);
-  });
-  it("should reject unknown commands", () => {
-    expect(valid.includes("trade")).toBe(false);
-  });
-});
-
-describe("market activity", () => {
-  it("should detect future end date as active", () => {
-    expect(isActive("2030-12-31")).toBe(true);
-  });
-  it("should detect past end date as inactive", () => {
-    expect(isActive("2020-01-01")).toBe(false);
+    expect(snapshot.warnings).toContain("Market is not active.");
+    expect(snapshot.warnings).toContain("Yes: best bid exceeds best ask.");
+    expect(snapshot.warnings).toContain("No: top of book is incomplete.");
+    expect(snapshot.outcomes[1]?.spread).toBeNull();
   });
 });
