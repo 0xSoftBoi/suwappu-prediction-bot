@@ -9,12 +9,15 @@ bun install --frozen-lockfile
 bun run typecheck
 bun test
 bun run build
+bun audit --audit-level=high
 
 python -m pip install -r requirements.txt
+python -m pip install pip-audit
 python -m unittest discover -s tests -p 'test_*.py'
+pip-audit -r requirements.txt
 ```
 
-Keep pull requests narrow and include regression tests for changed alert, state, network, or authority behavior.
+Keep pull requests narrow and include regression tests for changed alert, state, network, or authority behavior. CI must keep both dependency audits, the container contract, and TypeScript/Python CodeQL green.
 
 ## Security boundary
 
