@@ -14,12 +14,18 @@ from typing import Any
 from suwappu import create_client
 
 
-def require_env(name: str) -> str:
-    value = os.environ.get(name)
-    if not value:
-        print(f"Error: {name} not set", file=sys.stderr)
-        raise SystemExit(1)
+def api_key(*, required: bool = False) -> str:
+    """Return an optional research key, rejecting ambiguous whitespace."""
+    value = os.environ.get("SUWAPPU_API_KEY", "")
+    if value != value.strip():
+        raise ValueError("SUWAPPU_API_KEY must not contain leading or trailing whitespace")
+    if required and not value:
+        raise ValueError("SUWAPPU_API_KEY is required for account-scoped prediction reads")
     return value
+
+
+def client(*, authenticated: bool = False):
+    return create_client(api_key=api_key(required=authenticated))
 
 
 def dump(value: Any) -> None:
@@ -165,8 +171,8 @@ def build_market_health_snapshot(
 
 
 async def cmd_browse(args: argparse.Namespace) -> None:
-    async with create_client(api_key=require_env("SUWAPPU_API_KEY")) as client:
-        markets = await client.predict.markets(query=args.query, limit=args.top)
+    async with client() as sdk:
+        markets = await sdk.predict.markets(query=args.query, limit=args.top)
         if args.json:
             dump(markets)
             return
@@ -186,8 +192,8 @@ async def cmd_browse(args: argparse.Namespace) -> None:
 
 
 async def cmd_detail(args: argparse.Namespace) -> None:
-    async with create_client(api_key=require_env("SUWAPPU_API_KEY")) as client:
-        detail = await client.predict.market(args.id)
+    async with client() as sdk:
+        detail = await sdk.predict.market(args.id)
         if args.json:
             dump(detail)
             return
@@ -200,44 +206,44 @@ async def cmd_detail(args: argparse.Namespace) -> None:
 
 
 async def cmd_book(args: argparse.Namespace) -> None:
-    async with create_client(api_key=require_env("SUWAPPU_API_KEY")) as client:
-        dump(await client.predict.book(args.id))
+    async with client() as sdk:
+        dump(await sdk.predict.book(args.id))
 
 
 async def cmd_price(args: argparse.Namespace) -> None:
-    async with create_client(api_key=require_env("SUWAPPU_API_KEY")) as client:
-        dump(await client.predict.price(args.id))
+    async with client() as sdk:
+        dump(await sdk.predict.price(args.id))
 
 
 async def cmd_trades(args: argparse.Namespace) -> None:
-    async with create_client(api_key=require_env("SUWAPPU_API_KEY")) as client:
-        dump(await client.predict.trades(args.id, limit=args.limit))
+    async with client() as sdk:
+        dump(await sdk.predict.trades(args.id, limit=args.limit))
 
 
 async def cmd_snapshot(args: argparse.Namespace) -> None:
-    async with create_client(api_key=require_env("SUWAPPU_API_KEY")) as client:
+    async with client() as sdk:
         detail, book, prices, trades = await asyncio.gather(
-            client.predict.market(args.id),
-            client.predict.book(args.id),
-            client.predict.price(args.id),
-            client.predict.trades(args.id, limit=args.trades),
+            sdk.predict.market(args.id),
+            sdk.predict.book(args.id),
+            sdk.predict.price(args.id),
+            sdk.predict.trades(args.id, limit=args.trades),
         )
         dump(build_market_health_snapshot(detail, book, prices, trades))
 
 
 async def cmd_positions(args: argparse.Namespace) -> None:
-    async with create_client(api_key=require_env("SUWAPPU_API_KEY")) as client:
-        dump(await client.predict.positions())
+    async with client(authenticated=True) as sdk:
+        dump(await sdk.predict.positions())
 
 
 async def cmd_orders(args: argparse.Namespace) -> None:
-    async with create_client(api_key=require_env("SUWAPPU_API_KEY")) as client:
-        dump(await client.predict.orders(status=args.status))
+    async with client(authenticated=True) as sdk:
+        dump(await sdk.predict.orders(status=args.status))
 
 
 async def cmd_events(args: argparse.Namespace) -> None:
-    async with create_client(api_key=require_env("SUWAPPU_API_KEY")) as client:
-        dump(await client.predict.events(query=args.query, limit=args.top))
+    async with client() as sdk:
+        dump(await sdk.predict.events(query=args.query, limit=args.top))
 
 
 def main() -> None:
@@ -288,7 +294,13 @@ def main() -> None:
         "orders": cmd_orders,
         "events": cmd_events,
     }
-    asyncio.run(commands[args.command](args))
+    try:
+        asyncio.run(commands[args.command](args))
+    except Exception as error:
+        status = getattr(error, "status", None)
+        detail = f"HTTP {status}" if isinstance(status, int) else type(error).__name__
+        print(f"Error: prediction read failed ({detail})", file=sys.stderr)
+        raise SystemExit(1) from None
 
 
 if __name__ == "__main__":

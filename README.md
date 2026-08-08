@@ -1,174 +1,189 @@
-# Suwappu Prediction Research Bot
+# Suwappu Standalone Prediction Monitor
 
-A read-only prediction-market research reference for builders using [Suwappu](https://suwappu.bot).
+A read-only prediction-market monitoring product for builders using [Suwappu](https://suwappu.bot).
 
-The TypeScript and Python CLIs expose market discovery plus order-book, price, trade, position, order-history, and event data. They also build a normalized `snapshot` that turns four live reads into top-of-book spread/depth context you can reuse in a screener, watchlist, alert, or research product.
+It can discover markets, inspect books/prices/trades, normalize a four-read market-health `snapshot`, and evaluate a durable `watch` rule with hysteresis, liquidity gates, cooldown, and restart-safe deduplication. The monitoring path needs **no API key** because Suwappu's market research routes are public reads.
 
-This repository intentionally does **not** expose order placement or cancellation, so its commands cannot place a prediction-market trade. That narrow authority is a feature: use it when an analyst or agent should be able to research a market without inheriting trading credentials.
+This repository intentionally has no order or cancel command. `positions` and `orders` are account reads and require `SUWAPPU_API_KEY`; research and monitoring do not.
 
-## What you can explore
+## What makes v2 a standalone product
 
-| Command | Data |
+| Property | v2 contract |
 |---|---|
-| `browse` | Search/list prediction markets |
-| `detail --id …` | Full market metadata |
-| `book --id …` | Current order book |
-| `price --id …` | Current outcome prices |
-| `trades --id …` | Recent market trades |
-| `snapshot --id …` | Detail + midpoint + top-of-book spread/nearby depth + recent-trade freshness |
-| `positions` | This agent's prediction positions |
-| `orders` | This agent's existing prediction orders |
-| `events` | Browse/search prediction events |
+| Authority | Market research/watch is credential-free; no money-moving command exists |
+| Failure behavior | Every REST read has a bounded timeout; safe GETs retry only transient failures |
+| Alert correctness | Durable rule identity + hysteresis + cooldown prevents poll-noise duplicates |
+| Market quality | Optional max-spread and minimum two-sided near-book depth gates |
+| State | Private directory, `0600` state/lock, exclusive writer lock, atomic rename + file fsync |
+| Observability | Optional metadata-only API events; never logs keys, market IDs, queries, URLs, or response bodies |
+| Packaging | Reproducible Bun lock, compiled standalone build, non-root container |
+| Supply chain | High-severity dependency audit + TypeScript/Python CodeQL in CI |
 
-## TypeScript quick start
+This is a strong **single-node monitoring reference**, not a claim of multi-tenant SaaS readiness. Team tenancy, managed databases, queues, RBAC/SSO, delivery integrations, retention policy, backups, SLOs, and HA remain application responsibilities; see [BUILDING_A_PRODUCT.md](BUILDING_A_PRODUCT.md).
+
+## Five-minute start: research without credentials
 
 ```bash
 git clone https://github.com/0xSoftBoi/suwappu-prediction-bot.git
 cd suwappu-prediction-bot
 bun install --frozen-lockfile
 
-export SUWAPPU_API_KEY=suwappu_sk_...
-
-bun run src/cli.ts browse --query bitcoin --top 5
-bun run src/cli.ts book --id <market-id>
-bun run src/cli.ts price --id <market-id>
-bun run src/cli.ts trades --id <market-id> --limit 20
-bun run src/cli.ts snapshot --id <market-id> --trades 20
-bun run src/cli.ts events --query crypto --top 10
+bun src/cli.ts browse --query bitcoin --top 5
+bun src/cli.ts snapshot --id <market-id> --trades 20
 ```
 
-## Python quick start
+The public read surface is:
 
-The current Suwappu Python SDK is source-only and is not yet published to PyPI. `requirements.txt` pins it to a specific `suwappubot` commit so the example is reproducible today.
+| Command | Product datum | API key? |
+|---|---|---:|
+| `browse` | market discovery | No |
+| `detail --id …` | market metadata | No |
+| `book --id …` | outcome books | No |
+| `price --id …` | outcome midpoints | No |
+| `trades --id …` | recent trades | No |
+| `snapshot --id …` | normalized market-health evidence | No |
+| `events` | event discovery | No |
+| `watch …` | durable threshold state + alert decision | No |
+| `positions` / `orders` | this Suwappu agent's account state | **Yes** |
+
+## Turn a snapshot into a durable alert
+
+Run one evaluation on each scheduler tick:
+
+```bash
+bun src/cli.ts watch \
+  --id <market-id> \
+  --outcome Yes \
+  --above 0.60 \
+  --hysteresis 0.02 \
+  --max-spread 0.03 \
+  --min-depth 50 \
+  --cooldown-seconds 3600
+```
+
+The command prints one JSON decision. `alert: true` occurs only when the midpoint crosses into the rule, required market-quality evidence is present, and cooldown permits delivery. A prior active rule does not reset until the midpoint crosses the hysteresis boundary. Missing/thin/wide market data yields `insufficient_data` and **does not erase prior state**.
+
+Use the JSON as the input to your email, Slack, webhook, queue, or customer notification layer. Keep delivery idempotency in that layer too—the repository guarantees monitor-state dedupe, not exactly-once delivery across an external network.
+
+State defaults to `.suwappu-prediction/watch-state.json`. Set `SUWAPPU_PREDICTION_STATE_DIR` to durable storage in production. Only one writer may own `watch.lock`; the application never guesses that an existing lock is stale.
+
+## What a snapshot means
+
+`snapshot` concurrently reads market detail, midpoint prices, outcome books, and recent trades. It derives:
+
+- best bid/ask and spread;
+- share depth within one cent of each best price;
+- midpoint and last-trade context;
+- capture time and recent-trade freshness;
+- warnings for inactive, empty, incomplete, crossed, or cross-read-inconsistent books.
+
+It is a **market-health snapshot, not a forecast and not an executable quote**. The four reads are not atomic. A market can move between them, a midpoint is not a fill price, and a market price is not proof that your own probability model is calibrated.
+
+## Request policy
+
+The v2 TypeScript product uses the explicit read-only Suwappu REST contract for all research commands. That gives the product one consistent network policy even while published SDK packages lag the monorepo source.
+
+Defaults:
+
+```text
+SUWAPPU_REQUEST_TIMEOUT_MS=20000   # allowed: 250..30000
+SUWAPPU_READ_RETRIES=2             # allowed: 0..4
+SUWAPPU_API_EVENTS=0               # set 1 for metadata-only stderr events
+```
+
+Only safe `GET` reads retry, and only on transport failure, HTTP 408, 429, or 5xx. `Retry-After` is honored up to a five-second per-retry cap. Successful malformed JSON and contract-shape failures fail closed. Error messages intentionally omit upstream response bodies.
+
+`SUWAPPU_API_URL` must be HTTPS except for localhost development and cannot contain credentials, a query, or a fragment. If an API key is supplied, surrounding whitespace is rejected.
+
+## When an API key is actually needed
+
+Only account-scoped reads in this repo require it:
+
+```bash
+export SUWAPPU_API_KEY=suwappu_sk_...
+bun src/cli.ts positions
+bun src/cli.ts orders --status open
+```
+
+A research-only deployment should simply omit the key. Do not mount a trading credential into a watch container “just in case.”
+
+## Build and containerize it
+
+```bash
+bun run typecheck
+bun test
+bun run build
+./dist/suwappu-predict --help
+
+docker build -t suwappu-prediction-bot .
+docker run --rm --network none suwappu-prediction-bot --help
+```
+
+For a scheduled container, persist `/data`:
+
+```bash
+docker run --rm \
+  -v prediction-state:/data \
+  suwappu-prediction-bot \
+  watch --id <market-id> --outcome Yes --above 0.60 --max-spread 0.03
+```
+
+The image runs as the non-root `bun` user. See [docs/OPERATIONS.md](docs/OPERATIONS.md) before running the watch command unattended.
+
+## Python companion
+
+`bot.py` keeps a Python SDK example for builders who prefer Python. The current Suwappu Python SDK is source-only, so `requirements.txt` pins a known `suwappubot` commit. Its public research commands now also work without an API key; account reads still require one.
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
 python -m pip install -r requirements.txt
-
-export SUWAPPU_API_KEY=suwappu_sk_...
-
 python bot.py browse --query bitcoin --top 5
-python bot.py book --id <market-id>
-python bot.py trades --id <market-id> --limit 20
-python bot.py snapshot --id <market-id> --trades 20
-python bot.py positions
-python bot.py orders --status open
+python bot.py snapshot --id <market-id>
 ```
 
-## Get an API key
+The durable `watch` runtime and its stronger retry/telemetry policy are intentionally canonical in TypeScript rather than maintaining two production state machines.
 
-```bash
-curl -X POST https://api.suwappu.bot/v1/agent/register \
-  -H "Content-Type: application/json" \
-  -d '{"name":"my-prediction-explorer"}'
-```
+## How this stacks up against current Polymarket OSS
 
-Store the returned `suwappu_sk_...` key securely.
+Polymarket's current official [TypeScript SDK](https://github.com/Polymarket/ts-sdk) and [Python SDK](https://github.com/Polymarket/py-sdk) are the better choice for direct venue authentication, full trading workflows, or venue-specific features. Polymarket also exposes a [real-time market stream](https://docs.polymarket.com/market-data/realtime-data), which is a better fit than repeatedly polling this four-read snapshot when sub-poll latency matters.
 
-## SDK compatibility
-
-The published TypeScript package is currently `@suwappu/sdk@0.4.x`. Its prediction namespace covers market listing/details, but the `suwappubot` monorepo has already added richer 0.6.x prediction helpers for books, prices, trades, positions, orders, events, order placement, and cancellation.
-
-To keep this repository installable today:
-
-- TypeScript uses the published SDK for `browse` and `detail`, then a tiny `src/api.ts` bridge for the newer **read-only** endpoints.
-- Python pins the current source SDK, whose prediction namespace already exposes the richer read methods.
-
-Once matching packages are published, the bridge can collapse into normal SDK calls.
-
-The CLIs bound list/trade counts to `1..100`, use a 30-second HTTP timeout on the TypeScript bridge, and fail clearly on malformed successful responses rather than passing arbitrary upstream text into product logic.
-
-## One useful product datum: `snapshot`
-
-`snapshot` concurrently reads market detail, midpoint prices, the full outcome books, and recent trades, then normalizes them into one JSON document:
-
-```json
-{
-  "marketId": "...",
-  "question": "Will ...?",
-  "active": true,
-  "volume": 125000,
-  "liquidity": 20000,
-  "outcomes": [
-    {
-      "outcome": "Yes",
-      "midpoint": 0.44,
-      "bestBid": 0.42,
-      "bestAsk": 0.46,
-      "spread": 0.04,
-      "bidDepthWithinOneCentShares": 5,
-      "askDepthWithinOneCentShares": 5
-    }
-  ],
-  "recentTrades": { "count": 20, "latestAt": "..." },
-  "warnings": []
-}
-```
-
-This is a **market-health snapshot**, not a forecast or an executable quote. The four reads are not atomic: the venue can move between requests. The helper surfaces obvious empty/crossed/inconsistent-book conditions rather than inventing missing liquidity.
-
-Use it as an input to watchlists, alerts, research briefs, or your own forecasting model. If you publish a probability forecast, store the forecast separately from the market midpoint and score it only after the outcome resolves.
-
-## Why no `order` command?
-
-The current SDK source can place and cancel prediction-market orders. This example deliberately stops at read-only research so it is safe to hand to an exploratory agent without accidentally exposing a financial action.
-
-If your product needs trading, implement a separate application-level approval boundary and server-side policy controls before adding those write methods.
-
-`positions` and `orders` are also read-only. A fresh research-only agent can still receive an upstream “no Polymarket credentials” response because those account views depend on trading credentials initialized by a workflow outside this repository. The explorer does not place an order just to make those reads work.
-
-## How this stacks up against direct Polymarket SDKs
-
-Polymarket has moved new integrations to its unified [TypeScript SDK](https://github.com/Polymarket/ts-sdk) and [Python SDK](https://github.com/Polymarket/py-sdk). Those official SDKs are the better choice when your product needs direct Polymarket authentication, full account/trading workflows, streaming, or venue-specific features.
-
-This repository should stay smaller:
-
-| Need | Use this Suwappu reference | Use Polymarket's unified SDK |
+| Need | This Suwappu product | Polymarket unified SDKs |
 |---|---:|---:|
-| Narrow read-only allowlist for an analyst/agent | Yes | Build your own boundary |
-| One API identity alongside swaps/perps/lending/MCP | Yes | No |
-| Copyable market-health normalization | Yes | Build product logic on SDK data |
-| Direct venue auth/order lifecycle/streaming | No | Yes |
-| Claim a profitable prediction strategy | No | No SDK can establish that for you |
+| Credential-free, narrow analyst/agent surface | Built in | Use the SDK's public client / build your boundary |
+| One normalized market-health + durable alert primitive | Built in | Build product logic on venue data |
+| One Suwappu plane beside swaps/perps/lending/MCP | Yes | No |
+| Direct streaming + venue-native lifecycle | No | Yes |
+| Trading/account authentication | Not this product | Yes |
+| Proof of a profitable forecasting/trading edge | No | No SDK provides this |
 
-The differentiation is the authority/product boundary, not reimplementing a CLOB client.
+The differentiation is the authority and product-state boundary, not a second implementation of Polymarket's CLOB SDK.
 
-## Hosted MCP alternative
+## Turn it into a business
 
-Suwappu's hosted MCP server exposes prediction-market tools alongside swaps, perps, lending, wallet policies, and other agent capabilities:
-
-```text
-https://api.suwappu.bot/mcp
-```
-
-Use this focused repo when you want a narrow prediction-data allowlist; use MCP when you want a broader tool surface.
-
-## Turn the research loop into a product
-
-Read [BUILDING_A_PRODUCT.md](BUILDING_A_PRODUCT.md) for a concrete product ladder—free screener -> paid watchlists/alerts -> research workspace/API—and for activation, retention, request-cost, calibration, and builder-margin metrics. It keeps your business economics separate from whether any customer prediction turns out to be right.
+Read [BUILDING_A_PRODUCT.md](BUILDING_A_PRODUCT.md) for the product ladder and economics: free screener -> paid durable alerts -> research workspace/API -> optional separately approved execution. The guide keeps customer forecast/trading outcomes separate from your builder contribution margin.
 
 ## Development
 
 ```bash
 bun install --frozen-lockfile
-bun run check
+bun run typecheck
 bun test
+bun run build
 
 python -m pip install -r requirements.txt
 python -m py_compile bot.py
 python -m unittest discover -s tests -p 'test_*.py'
 ```
 
-CI runs the TypeScript typecheck/source tests, the Python read-side regressions, and the pinned Python SDK import as blocking checks.
+CI makes locked install, tests, typecheck, standalone build/help, Python compatibility, high-severity audit, non-root container build, and CodeQL blocking evidence for changes.
 
 ## Links
 
+- [Suwappu Prediction Markets guide](https://docs.suwappu.bot/guides/prediction-markets)
 - [Suwappu docs](https://docs.suwappu.bot)
-- [Prediction Markets guide](https://docs.suwappu.bot/guides/prediction-markets)
-- [SDK source](https://github.com/0xSoftBoi/suwappubot/tree/main/packages/sdk)
-- [Python SDK source](https://github.com/0xSoftBoi/suwappubot/tree/main/packages/sdk-python)
-- [Build a prediction-research product](BUILDING_A_PRODUCT.md)
+- [Builder product guide](BUILDING_A_PRODUCT.md)
+- [Operations runbook](docs/OPERATIONS.md)
 
 ## License
 

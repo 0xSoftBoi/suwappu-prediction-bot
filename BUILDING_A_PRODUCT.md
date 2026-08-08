@@ -26,6 +26,8 @@ That is why this repository keeps a strict read-only allowlist even though the u
 
 Validate paid retention in the first three stages before turning a research credential into a trading credential.
 
+The clean activation event for this product is **saved rule -> first evidence-bearing watch evaluation**. A first paid-value event is stronger: **a deduplicated alert is delivered and the customer keeps the rule enabled or takes a research follow-up action**. Do not substitute API calls, signups, or page views for those product actions.
+
 ## The repository's `snapshot` is a useful primitive
 
 One `snapshot --id ...` combines four Suwappu reads:
@@ -76,6 +78,16 @@ AND the same state was not already alerted
 ```
 
 Store the last alert state. Add a cooldown/hysteresis rule so a value bouncing around one threshold does not send dozens of notifications.
+
+The TypeScript v2 runtime implements that primitive directly:
+
+```bash
+bun src/cli.ts watch \
+  --id <market-id> --outcome Yes --above 0.60 \
+  --hysteresis 0.02 --max-spread 0.03 --min-depth 50
+```
+
+Its durable state answers “did this rule just transition?” across process restarts. Spread and two-sided near-book depth are **quality gates**, not alpha claims. If required evidence is missing, `watch` returns `insufficient_data` and preserves the prior rule state instead of converting a data outage into a new signal.
 
 If you monitor many markets, do not call `snapshot` for every market every few seconds. Search/list first, narrow the watchlist, cache slow-changing metadata, and spend book/trade calls only on markets a customer actually follows.
 
@@ -130,6 +142,24 @@ Use current Suwappu pricing/rate-limit documentation for actual cost. The import
 
 Price from measured cost and retained value. Cache metadata, dedupe alerts, back off on failures, and let customers choose freshness tiers when that tradeoff is meaningful.
 
+For a single paid plan, make the economics observable per active watchlist:
+
+```text
+watchlist contribution
+  = allocated subscription/usage revenue
+  - Suwappu read cost for that watchlist
+  - notification + model + storage cost
+  - allocated payment/support/refund cost
+```
+
+Then test capability fences instead of “better returns” fences:
+
+| Free | Individual paid | Team / API |
+|---|---|---|
+| small saved watchlist, manual snapshots | more rules, durable alerts, retained history | shared rules, roles, webhooks/API, exports, audit retention |
+
+Freshness can be a paid capability only when you can meet the operational promise and its request cost still leaves margin. Never sell “higher win rate” as the tier benefit.
+
 ## Separate builder economics from customer outcomes
 
 Builder contribution margin:
@@ -158,7 +188,7 @@ Polymarket now maintains unified [TypeScript](https://github.com/Polymarket/ts-s
 Use this Suwappu reference when you want:
 
 - a narrow read-only tool surface that is easy to give an analyst/agent;
-- one Suwappu identity alongside other financial primitives;
+- a Suwappu-compatible data plane that can stay credential-free for public research;
 - a copyable normalization layer for research products;
 - hosted MCP as an alternate agent interface.
 
@@ -166,17 +196,22 @@ Use the direct Polymarket SDK when you need venue-native streaming, wallet/authe
 
 Do not fork an entire venue SDK into this repository. Keeping the boundary small is what makes it understandable.
 
-## Production work before charging teams
+## Know what v2 ships—and what a paid team service still needs
 
-- Put watchlists, rules, snapshots, and alert state in durable tenant-scoped storage.
-- Add uniqueness/deduplication so retries do not send the same alert repeatedly.
-- Record rule/model versions with every emitted alert or forecast.
-- Define data freshness targets and expose stale/incomplete state to customers.
-- Cache slow-changing market metadata separately from books/trades.
-- Add rate-limit/backoff behavior and a request budget per tenant.
-- Keep API keys in secret management; never put them in saved watchlist JSON.
-- Keep research credentials read-only unless the customer deliberately upgrades into a separately reviewed execution product.
-- If execution is later added, introduce explicit approval, spend/exposure limits, order-state reconciliation, and an auditable kill switch before the first live order.
+The repository now ships a real single-node operating baseline: credential-free public research, bounded/retryable GETs, metadata-only request events, durable atomic watch state, an exclusive writer lock, hysteresis/cooldown dedupe, market-quality gates, a non-root container, dependency audit, and CodeQL.
+
+That is enough to build and validate an individual/small-workflow product. It is **not** the same as multi-tenant enterprise infrastructure. Before charging teams for an enterprise service:
+
+- move customer watchlists, snapshots, rule versions, and delivery state to durable tenant-scoped storage;
+- add queue-backed notification delivery with its own idempotency key and retry/dead-letter policy;
+- define data-freshness and delivery SLOs and expose stale/incomplete state to customers;
+- add per-tenant request budgets, caching, quotas, and abuse controls;
+- add authentication, roles/SSO as required, tenant isolation tests, audit retention, backup/restore drills, and an incident runbook;
+- keep account/trading keys in secret management and out of research-only workers entirely;
+- add capacity/HA design if you promise continuous monitoring across node or region failure;
+- if execution is later added, create a separate approval, spend/exposure-limit, intent/reconciliation, and kill-switch boundary before the first live order.
+
+Do not label the hosted product enterprise-ready until the claims you sell—retention, availability, support, security controls—are enforced and testable in that deployment.
 
 ## A good first paid experiment
 
