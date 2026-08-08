@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Add a blocking Python dependency vulnerability audit alongside the existing Bun audit and dual-language CodeQL release gates.
+- Document the same dependency gate for local contributors and production release checks.
+
 ## 2.0.0 — 2026-08-07
 
 - Make public prediction research credential-free and keep account reads explicitly authenticated.
