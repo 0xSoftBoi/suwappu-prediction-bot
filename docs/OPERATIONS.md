@@ -76,6 +76,7 @@ bun run build
 ./dist/suwappu-predict --help
 python compatibility tests
 bun audit --audit-level=high
+pip-audit -r requirements.txt
 non-root container build + zero-network help smoke test
 TypeScript + Python CodeQL
 ```
