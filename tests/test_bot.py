@@ -1,7 +1,9 @@
 import argparse
+import os
 import sys
 import types
 import unittest
+from unittest.mock import patch
 
 
 # Unit-test the repository's pure read-side analysis without requiring the SDK
@@ -23,6 +25,22 @@ class ReadCountTests(unittest.TestCase):
         for value in ("0", "101", "2.5", "-1", "nope"):
             with self.assertRaises(argparse.ArgumentTypeError):
                 bot.bounded_count(value)
+
+
+class AuthorityBoundaryTests(unittest.TestCase):
+    @patch.dict(os.environ, {}, clear=True)
+    def test_public_research_does_not_require_api_key(self) -> None:
+        self.assertEqual(bot.api_key(), "")
+
+    @patch.dict(os.environ, {}, clear=True)
+    def test_account_reads_require_api_key(self) -> None:
+        with self.assertRaisesRegex(ValueError, "account-scoped"):
+            bot.api_key(required=True)
+
+    @patch.dict(os.environ, {"SUWAPPU_API_KEY": " secret "}, clear=True)
+    def test_ambiguous_api_key_whitespace_is_rejected(self) -> None:
+        with self.assertRaisesRegex(ValueError, "whitespace"):
+            bot.api_key()
 
 
 class SnapshotTests(unittest.TestCase):
