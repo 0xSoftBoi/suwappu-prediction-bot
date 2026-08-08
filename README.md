@@ -17,7 +17,7 @@ This repository intentionally has no order or cancel command. `positions` and `o
 | State | Private directory, `0600` state/lock, exclusive writer lock, atomic rename + file fsync |
 | Observability | Optional metadata-only API events; never logs keys, market IDs, queries, URLs, or response bodies |
 | Packaging | Reproducible Bun lock, compiled standalone build, non-root container |
-| Supply chain | High-severity dependency audit + TypeScript/Python CodeQL in CI |
+| Supply chain | Blocking Bun + Python dependency audits + TypeScript/Python CodeQL in CI |
 
 This is a strong **single-node monitoring reference**, not a claim of multi-tenant SaaS readiness. Team tenancy, managed databases, queues, RBAC/SSO, delivery integrations, retention policy, backups, SLOs, and HA remain application responsibilities; see [BUILDING_A_PRODUCT.md](BUILDING_A_PRODUCT.md).
 
@@ -170,13 +170,16 @@ bun install --frozen-lockfile
 bun run typecheck
 bun test
 bun run build
+bun audit --audit-level=high
 
 python -m pip install -r requirements.txt
+python -m pip install pip-audit
 python -m py_compile bot.py
 python -m unittest discover -s tests -p 'test_*.py'
+pip-audit -r requirements.txt
 ```
 
-CI makes locked install, tests, typecheck, standalone build/help, Python compatibility, high-severity audit, non-root container build, and CodeQL blocking evidence for changes.
+CI makes locked installs, tests, typecheck, standalone build/help, Python compatibility, a blocking high-severity Bun audit, a blocking Python known-vulnerability audit, non-root container build, and CodeQL blocking evidence for changes.
 
 ## Links
 
